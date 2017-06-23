@@ -1,0 +1,44 @@
+<!DOCTYPE HTML>
+<html>
+
+<head>
+    <title>坦克测试</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+     <meta name="author" content="Jief King@温馨"/>
+    <meta name="description" content="Description" />
+    <style>
+        body{margin:0;padding:0;}
+        #can{display:block;}
+    </style>
+    <script type='text/javascript' src='tankClass.js'></script>
+    <script type='text/javascript' src='Battlefield.js'></script>
+    <script type='text/javascript' src='tank.bot.js'></script>
+</head>
+
+<body>
+    <canvas id='can'></canvas>
+    <script>
+        var can = document.getElementById('can');
+        
+        can.width = window.innerWidth;
+        can.height = window.innerHeight;
+        
+        // 战场对象
+        
+        var zhan = {
+            // canvas对象
+            'box':can,
+            // 每局，坦克数量
+            'num':12
+        };
+        var test = {
+            'box':can,
+            'num':1,
+            'test':true
+        };
+        // var m = new Battlefield(test);
+        var m = new Battlefield(zhan);
+    </script>
+</body>
+
+</html>
