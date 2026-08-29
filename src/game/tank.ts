@@ -58,6 +58,15 @@ export class Tank {
   /** 游走重选方向时刻（世界时钟 ms） */
   wanderAt = 0;
 
+  /** —— 脱困机动：物理层检测到“命令了移动但实际几乎没位移”时置位 —— */
+  blocked = false;
+  /** 脱困转向的截止时间（世界时钟 ms） */
+  escapeUntil = 0;
+  /** 脱困期间强制的车体朝向 */
+  escapeHeading = 0;
+  /** 脱困转向左右交替，避免在两面墙之间来回顶 */
+  blockFlip = false;
+
   /** 头顶浮动消息 */
   msg: { text: string; expiresAt: number } | null = null;
 

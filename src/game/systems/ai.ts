@@ -1,5 +1,5 @@
 import { ARRIVE_EPS } from '../../config';
-import { angleDiff, directionAngle, turnToward } from '../../core/math';
+import { angleDiff, directionAngle, normalizeAngle, turnToward } from '../../core/math';
 import type { Tank } from '../tank';
 import type { World } from '../world';
 
@@ -44,6 +44,17 @@ export function updateAI(t: Tank, world: World, dtMs: number): void {
       );
       t.wanderAt = world.clock + 1500 + world.rng() * 3000;
     }
+  }
+
+  // —— 脱困机动：物理层报告“想动但没动”（顶墙/被别车卡住）时，限时向侧后方绕行 ——
+  if (moving && world.clock < t.escapeUntil) {
+    t.heading = t.escapeHeading;
+  } else if (t.blocked && moving) {
+    t.blockFlip = !t.blockFlip;
+    t.escapeHeading = normalizeAngle(t.heading + (t.blockFlip ? 1 : -1) * 2.4);
+    t.escapeUntil = world.clock + 450;
+    t.heading = t.escapeHeading;
+    moving = true;
   }
 
   t.stopped = !moving;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { findTarget, gunAligned, updateAI } from '../src/game/systems/ai';
+import { angleDiff } from '../src/core/math';
 import { EAST, makeTank, makeWorld, noWander, tuneGun, WEST } from './helpers';
 import { STEP_MS, TANK_BASE } from '../src/config';
 
@@ -93,5 +94,25 @@ describe('AI 索敌与移动决策', () => {
     expect(a.wanderAt).toBeGreaterThan(0);
     expect(a.heading).not.toBeCloseTo(EAST);
     expect(Math.hypot(a.vx, a.vy)).toBeCloseTo(TANK_BASE.speed);
+  });
+
+  it('卡死脱困：blocked 触发限时侧转机动，机动中保持移动与索敌；解除后恢复追击朝向', () => {
+    const world = makeWorld();
+    const a = makeTank(world, 'machinegun', 100, 400, EAST);
+    const b = makeTank(world, 'machinegun', 300, 400, WEST); // 距离 200：可见但在射程外，本应向东追击
+    noWander(a, b);
+
+    a.blocked = true; // 模拟物理层报告“顶墙/被挤住”
+    updateAI(a, world, dt);
+    expect(a.escapeUntil).toBeGreaterThan(world.clock);
+    expect(Math.abs(angleDiff(a.heading, EAST))).toBeGreaterThan(1); // 已偏离撞墙方向
+    expect(Math.hypot(a.vx, a.vy)).toBeCloseTo(TANK_BASE.speed); // 机动中保持移动
+    expect(a.foe).toBe(b); // 索敌不受影响，炮管照常跟敌
+
+    // 机动窗口结束且物理不再报卡住 → 恢复向东追击
+    world.clock = a.escapeUntil + 1;
+    a.blocked = false;
+    updateAI(a, world, dt);
+    expect(a.heading).toBeCloseTo(EAST);
   });
 });

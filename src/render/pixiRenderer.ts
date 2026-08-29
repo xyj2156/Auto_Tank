@@ -23,11 +23,13 @@ class TankView {
   private ringG = new Graphics();
   private label = new Text({
     text: '',
-    style: { fontFamily: FONT, fontSize: 11, fill: 0xd8e3f0 }
+    resolution: 3,
+    style: { fontFamily: FONT, fontSize: 12, fill: 0xd8e3f0 }
   });
   private msg = new Text({
     text: '',
-    style: { fontFamily: FONT, fontSize: 15, fontWeight: 'bold', fill: 0xffd166 }
+    resolution: 3,
+    style: { fontFamily: FONT, fontSize: 16, fontWeight: 'bold', fill: 0xffd166 }
   });
   private drawnGunLv = -1;
 
@@ -49,6 +51,7 @@ class TankView {
     this.hpG.position.set(0, -tank.size - 10);
 
     this.hullC.addChild(this.stubG, this.bodyG);
+    this.gunC.addChild(this.gunG);
     this.hullC.rotation = -tank.moveHeading;
     this.gunC.rotation = -tank.gunHeading;
     this.root.addChild(this.hullC, this.gunC, this.ringG, this.hpG, this.label, this.msg);

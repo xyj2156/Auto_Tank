@@ -79,9 +79,14 @@ export class MatterPhysics implements PhysicsAdapter {
       });
     }
     Matter.Engine.update(this.engine, dtMs);
+    const dtS = dtMs / 1000;
     for (const t of world.tanks) {
       if (!t.alive || !t.body) continue;
       const b = t.body as Matter.Body;
+      // 卡死检测：命令了移动但实际位移远低于预期（顶墙/被别车挤住）→ 交给 AI 脱困机动
+      const expected = Math.hypot(t.vx, t.vy) * dtS;
+      const actual = Math.hypot(b.position.x - t.x, b.position.y - t.y);
+      t.blocked = expected >= 0.5 && actual < expected * 0.25;
       t.x = clamp(b.position.x, t.size, this.width - t.size);
       t.y = clamp(b.position.y, t.size, this.height - t.size);
       if (b.speed > 0.3) t.moveHeading = directionAngle(b.velocity.x, b.velocity.y);

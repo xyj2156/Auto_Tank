@@ -34,6 +34,7 @@ export class KinematicPhysics implements PhysicsAdapter {
     const dtS = dtMs / 1000;
     for (const t of world.tanks) {
       if (!t.alive) continue;
+      t.blocked = false; // 运动学模式自带边界反弹，不存在卡死
       t.x += t.vx * dtS;
       t.y += t.vy * dtS;
       const min = t.size;
