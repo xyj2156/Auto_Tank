@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { findTarget, gunAligned, updateAI } from '../src/game/systems/ai';
-import { angleDiff } from '../src/core/math';
 import { EAST, makeTank, makeWorld, noWander, tuneGun, WEST } from './helpers';
 import { STEP_MS, TANK_BASE } from '../src/config';
 
@@ -96,43 +95,62 @@ describe('AI 索敌与移动决策', () => {
     expect(Math.hypot(a.vx, a.vy)).toBeCloseTo(TANK_BASE.speed);
   });
 
-  it('卡死避让：blocked 期间渐进扫偏且保持移动与索敌；解除后迟滞回正', () => {
-    const world = makeWorld();
-    const a = makeTank(world, 'machinegun', 100, 400, EAST);
-    const b = makeTank(world, 'machinegun', 300, 400, WEST); // 距离 200：可见但在射程外，本应向东追击
-    noWander(a, b);
-
-    a.blocked = true; // 模拟物理层报告“顶墙/被挤住”
+  it('触墙反射锁定：朝东压右墙 → 方向反射向西并进入锁定', () => {
+    const world = makeWorld(600, 600);
+    const a = makeTank(world, 'machinegun', 576, 300, EAST); // d.right = 600-20-576 = 4 < 接触带
+    noWander(a);
+    a.orderTarget = { x: 598, y: 300 }; // 指令点在墙内一侧，抵达后必然持续朝东顶墙
     updateAI(a, world, dt);
-    expect(Math.abs(a.avoid)).toBeGreaterThan(0); // 偏转量开始累积
-    expect(Math.abs(angleDiff(a.heading, EAST))).toBeGreaterThan(0.04); // 已偏离撞墙方向
-    expect(Math.hypot(a.vx, a.vy)).toBeCloseTo(TANK_BASE.speed); // 机动中保持全速移动
-    expect(a.foe).toBe(b); // 索敌与炮管跟踪不受影响
-
-    // 持续顶墙：扫掠角连续增大（不是跳转一次就回头）
-    for (let i = 0; i < 30; i++) updateAI(a, world, dt);
-    expect(Math.abs(a.avoid)).toBeGreaterThan(0.5);
-
-    // 解除卡住 → 以低于扫掠的速度渐进回正
-    a.blocked = false;
-    for (let i = 0; i < 120; i++) updateAI(a, world, dt);
-    expect(a.avoid).toBe(0);
-    expect(a.heading).toBeCloseTo(EAST); // 恢复向东追击
+    expect(a.wallLock).toEqual({ axis: 'x', side: 1 });
+    expect(a.lockHeading).toBeCloseTo(WEST);
+    expect(a.vx).toBeLessThan(-50); // 反射后向西行进
   });
 
-  it('避让扫掠方向具有粘滞性：未扫到极限不会反向，避免左右抵消', () => {
-    const world = makeWorld();
-    const a = makeTank(world, 'machinegun', 100, 400, EAST);
-    const b = makeTank(world, 'machinegun', 300, 400, WEST);
-    noWander(a, b);
+  it('锁定迟滞：未到解锁距离前指令不得改向；离开后恢复常规决策', () => {
+    const world = makeWorld(600, 600);
+    const a = makeTank(world, 'machinegun', 560, 300, EAST);
+    noWander(a);
+    a.wallLock = { axis: 'x', side: 1 };
+    a.lockHeading = WEST;
+    a.orderTarget = { x: 598, y: 300 }; // 指令要求向东，但 d.right=20<60，锁定维持向西
 
-    // 极限(2.6rad)之前持续扫到极限：40 步远未到达（约 52 步），方向应始终如一
-    for (let i = 0; i < 40; i++) {
-      a.blocked = true;
-      updateAI(a, world, dt);
-      expect(a.avoidDir).toBe(1);
-    }
-    expect(a.avoid).toBeGreaterThan(1.5); // 单向持续累积，而非来回摆动
-    expect(a.avoid).toBeLessThanOrEqual(2.6);
+    updateAI(a, world, dt);
+    expect(a.wallLock).not.toBeNull();
+    expect(a.vx).toBeLessThan(0);
+
+    a.x = 500; // d.right = 80 > 60 → 本帧走完解除锁定
+    updateAI(a, world, dt);
+    expect(a.wallLock).toBeNull();
+
+    updateAI(a, world, dt); // 解锁后指令重新接管 → 向东
+    expect(a.vx).toBeGreaterThan(0);
+  });
+
+  it('转角双重反射：同时压两面墙时两轴一起反射（本例东南→西北）', () => {
+    const world = makeWorld(600, 600);
+    const a = makeTank(world, 'machinegun', 576, 576, Math.PI / 4); // 东南向压右下角
+    noWander(a);
+    a.orderTarget = { x: 598, y: 598 };
+    updateAI(a, world, dt);
+    expect(a.wallLock?.axis).toBe('x'); // 锁定锚点记录先判到的 x 轴
+    expect(a.vx).toBeLessThan(0); // 西北
+    expect(a.vy).toBeLessThan(0);
+    expect(a.lockHeading).toBeCloseTo(Math.PI + Math.PI / 4);
+  });
+
+  it('锁定期间不停火：向西脱离的同时炮管转向东敌并命中', () => {
+    const world = makeWorld(600, 600);
+    const a = makeTank(world, 'machinegun', 560, 300, EAST);
+    const c = makeTank(world, 'machinegun', 585, 300, WEST); // 贴墙靶机（对射距离内 → 原地停）
+    noWander(a, c);
+    tuneGun(a, { exp: null });
+    tuneGun(c, { exp: null, accuracy: 0 }); // 不还手
+    a.wallLock = { axis: 'x', side: 1 };
+    a.lockHeading = WEST;
+
+    for (let i = 0; i < 90; i++) world.step(STEP_MS); // 1.5s：转 180° 需约 60 步，之后开火
+    expect(a.stats.shoot).toBeGreaterThanOrEqual(1);
+    expect(a.stats.hit).toBeGreaterThanOrEqual(1); // 常量 rng=0.5 ≤ 命中线
+    expect(c.hp).toBeLessThan(c.maxHp);
   });
 });

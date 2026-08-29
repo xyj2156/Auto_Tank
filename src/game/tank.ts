@@ -60,12 +60,10 @@ export class Tank {
   /** 游走重选方向时刻（世界时钟 ms） */
   wanderAt = 0;
 
-  /** —— 卡死避让：物理层检测到“命令了移动但实际几乎没位移”时置位 —— */
-  blocked = false;
-  /** 避让偏转量（rad），叠加在 goalHeading 上；扫出快、回正慢形成迟滞 */
-  avoid = 0;
-  /** 扫掠方向（±1，仅当一侧扫到极限才反向；不再左右交替以免净位移抵消） */
-  avoidDir = 1;
+  /** —— 触墙反射锁：撞墙时方向沿墙轴反射并锁定，离开指定距离后解锁 —— */
+  wallLock: { axis: 'x' | 'y'; side: 1 | -1 } | null = null;
+  /** 锁定期内行驶的方向（反射后的朝向） */
+  lockHeading = 0;
 
   /** 头顶浮动消息 */
   msg: { text: string; expiresAt: number } | null = null;

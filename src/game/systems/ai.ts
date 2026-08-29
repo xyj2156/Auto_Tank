@@ -1,19 +1,28 @@
 import { ARRIVE_EPS } from '../../config';
-import { angleDiff, clamp, directionAngle, normalizeAngle, turnToward } from '../../core/math';
+import { angleDiff, directionAngle, turnToward } from '../../core/math';
 import type { Tank } from '../tank';
 import type { World } from '../world';
 
-/** 扫掠避让参数：扫出快、回正慢 → 迟滞环让坦克以掠射角贴墙滑行 */
-const AVOID_RATE = 3.0; // 顶墙时偏转扫描速度 rad/s
-const RELAX_RATE = 1.5; // 解除后回正速度 rad/s（小于扫描速度，形成迟滞）
-const AVOID_MAX = 2.6;  // 最大偏转 ≈150°，到极值反向扫描（应对死角/车堆）
+/** 触墙反射锁定参数（用户指定方案：纯几何判定，不依赖物理引擎反馈） */
+const WALL_CONTACT = 6; // 距墙接触带（px）
+const WALL_RELEASE = 60; // 锁定期内离该墙超过此距离才解锁（px）
+const PRESS_EPS = 0.05; // 朝向在该轴上的分量阈值，确保是“朝墙开”而非离开
+
+/** 到四面墙的内侧距离（可为负=穿透，判定同样成立） */
+function wallDist(t: Tank, world: World) {
+  return {
+    left: t.x - t.size,
+    right: world.width - t.size - t.x,
+    top: t.y - t.size,
+    bottom: world.height - t.size - t.y
+  };
+}
 
 /**
- * AI 系统：索敌（粘性目标 + 炮口夹角加权）→ 决策移动 → 扫掠避让 → 旋转炮管。
- * 旧版 bug 的修正：
- * - 索敌角度过滤用的“敌车车头角 + 常数 7”改为真实的炮口夹角加权；
- * - 象限分支转向改为最短角差 clamp（消除炮口抖动）；
- * - 顶墙死锁改为位移检测 + 渐进扫掠避让（上一版 137° 跳转 + 方向交替会左右摆动抵消，已废弃）。
+ * AI 系统：索敌（粘性目标 + 炮口夹角加权）→ 移动决策 → 触墙反射锁定 → 旋转炮管。
+ * 顶墙脱困采用几何反射锁：触墙且朝向含撞墙分量时把方向沿该墙轴反射并锁定，
+ * 保持反射方向行驶，直到离开该墙指定距离才解锁恢复 AI——
+ * 不依赖物理引擎的速度/位移反馈，逻辑层单测与浏览器行为完全一致。
  */
 export function updateAI(t: Tank, world: World, dtMs: number): void {
   const dtS = dtMs / 1000;
@@ -24,49 +33,91 @@ export function updateAI(t: Tank, world: World, dtMs: number): void {
   }
   if (!t.foe) t.foe = findTarget(t, world);
 
-  // —— 移动目标方向（goalHeading 保持“干净”，避让偏压单独叠加）——
   let moving = true;
-  if (t.orderTarget) {
-    const dx = t.orderTarget.x - t.x;
-    const dy = t.orderTarget.y - t.y;
-    if (Math.sqrt(dx * dx + dy * dy) <= ARRIVE_EPS) {
-      t.orderTarget = null;
-    } else {
-      t.goalHeading = directionAngle(dx, dy);
-    }
-  } else if (t.foe) {
-    const d = t.distanceTo(t.foe.x, t.foe.y);
-    if (d <= t.gun.sight + t.size) {
-      moving = false; // 进入射程，停下对射
-    } else {
-      t.goalHeading = t.angleTo(t.foe.x, t.foe.y); // 追击
-    }
-  } else if (world.clock >= t.wanderAt) {
-    // 游走：定期小角度转向
-    t.goalHeading = directionAngle(
-      Math.sin(t.goalHeading) + (world.rng() - 0.5),
-      Math.cos(t.goalHeading) + (world.rng() - 0.5)
-    );
-    t.wanderAt = world.clock + 1500 + world.rng() * 3000;
-  }
 
-  // —— 扫掠避让：物理层报告“想动但没动”时渐进偏转寻找切向通路，解除后缓慢回正 ——
-  if (t.blocked) {
-    t.avoid = clamp(t.avoid + t.avoidDir * AVOID_RATE * dtS, -AVOID_MAX, AVOID_MAX);
-    if (Math.abs(t.avoid) >= AVOID_MAX) t.avoidDir = -t.avoidDir;
-  } else if (t.avoid !== 0) {
-    t.avoid =
-      Math.abs(t.avoid) <= RELAX_RATE * dtS ? 0 : t.avoid - Math.sign(t.avoid) * RELAX_RATE * dtS;
-  }
+  if (t.wallLock) {
+    // —— 锁定态：沿反射方向行驶；贴到别的墙/死角时二次反射；离开锁定墙指定距离才解锁 ——
+    let dx = Math.sin(t.lockHeading);
+    let dy = Math.cos(t.lockHeading);
+    const d = wallDist(t, world);
+    if ((dx > PRESS_EPS && d.right < WALL_CONTACT) || (dx < -PRESS_EPS && d.left < WALL_CONTACT)) {
+      dx = -dx;
+    }
+    if ((dy > PRESS_EPS && d.bottom < WALL_CONTACT) || (dy < -PRESS_EPS && d.top < WALL_CONTACT)) {
+      dy = -dy;
+    }
+    t.lockHeading = directionAngle(dx, dy);
+    t.heading = t.lockHeading;
+    const away =
+      t.wallLock.axis === 'x'
+        ? t.wallLock.side > 0
+          ? d.right
+          : d.left
+        : t.wallLock.side > 0
+          ? d.bottom
+          : d.top;
+    if (away > WALL_RELEASE) t.wallLock = null; // 解锁后 goalHeading 照常驱动，指令/索敌不丢
+  } else {
+    // —— 常规移动决策：指令 > 对射停顿/追击 > 游走 ——
+    if (t.orderTarget) {
+      const ox = t.orderTarget.x - t.x;
+      const oy = t.orderTarget.y - t.y;
+      if (Math.sqrt(ox * ox + oy * oy) <= ARRIVE_EPS) {
+        t.orderTarget = null;
+      } else {
+        t.goalHeading = directionAngle(ox, oy);
+      }
+    } else if (t.foe) {
+      const d = t.distanceTo(t.foe.x, t.foe.y);
+      if (d <= t.gun.sight + t.size) {
+        moving = false; // 进入射程，停下对射
+      } else {
+        t.goalHeading = t.angleTo(t.foe.x, t.foe.y); // 追击
+      }
+    } else if (world.clock >= t.wanderAt) {
+      // 游走：定期小角度转向
+      t.goalHeading = directionAngle(
+        Math.sin(t.goalHeading) + (world.rng() - 0.5),
+        Math.cos(t.goalHeading) + (world.rng() - 0.5)
+      );
+      t.wanderAt = world.clock + 1500 + world.rng() * 3000;
+    }
+    t.heading = t.goalHeading;
 
-  if (moving) t.heading = normalizeAngle(t.goalHeading + t.avoid);
+    // —— 触墙检测（仅移动时）：撞哪面墙就沿哪根轴反射；转角可能同时撞两面墙 ——
+    if (moving) {
+      const d = wallDist(t, world);
+      let dx = Math.sin(t.heading);
+      let dy = Math.cos(t.heading);
+      let lock: { axis: 'x' | 'y'; side: 1 | -1 } | null = null;
+      if (dx > PRESS_EPS && d.right < WALL_CONTACT) {
+        dx = -dx;
+        lock = { axis: 'x', side: 1 };
+      } else if (dx < -PRESS_EPS && d.left < WALL_CONTACT) {
+        dx = -dx;
+        lock = { axis: 'x', side: -1 };
+      }
+      if (dy > PRESS_EPS && d.bottom < WALL_CONTACT) {
+        dy = -dy;
+        lock = lock ?? { axis: 'y', side: 1 };
+      } else if (dy < -PRESS_EPS && d.top < WALL_CONTACT) {
+        dy = -dy;
+        lock = lock ?? { axis: 'y', side: -1 };
+      }
+      if (lock) {
+        t.heading = directionAngle(dx, dy);
+        t.lockHeading = t.heading;
+        t.wallLock = lock;
+      }
+    }
+  }
 
   t.stopped = !moving;
   const speed = moving ? t.speed : 0;
   t.vx = Math.sin(t.heading) * speed;
   t.vy = Math.cos(t.heading) * speed;
 
-  // —— 炮管旋转：向目标或车头方向以最大角速度 clamp（避让机动期间照常跟踪开火）——
+  // —— 炮管旋转：向目标或车头方向以最大角速度 clamp（锁定机动期间照常跟踪开火）——
   const want = t.foe ? t.angleTo(t.foe.x, t.foe.y) : t.heading;
   t.gunHeading = turnToward(t.gunHeading, want, t.gun.rotRad * dtS);
 }

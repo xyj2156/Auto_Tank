@@ -9,34 +9,33 @@ import { STEP_MS } from '../src/config';
  * 复现验收反馈的“贴边卡死”场景——这是上一版限时跳转脱困失效的对照组。
  */
 describe('Matter 物理集成', () => {
-  it('指令指向墙内方向：坦克滑到墙边后贴墙切向移动，而非冻结在墙上', () => {
+  it('指令指向墙内方向：坦克触墙反射回撤、离墙解锁再靠近，往复不冻结', () => {
     const physics = new MatterPhysics();
     const world = new World(physics, 200, 200);
     world.rng = () => 0.5;
     const a = makeTank(world, 'machinegun', 60, 100, Math.PI / 2);
     physics.addTank(a);
     noWander(a);
-    // 目标点在 x=195，而墙的有效边界是 x=180：后半程必然顶墙
+    // 目标点在 x=195，而墙的有效边界是 x=180：必然反复顶墙
     a.orderTarget = { x: 195, y: 100 };
 
-    for (let i = 0; i < 300; i++) world.step(STEP_MS); // 预热：走到墙边
-    expect(a.x).toBeGreaterThan(170);
-
-    // 之后 10 秒：统计轨迹累计长度与横向偏移峰值，贴墙滑行应持续产生位移
     let path = 0;
-    let maxDy = 0;
+    let minX = Infinity;
+    let maxX = -Infinity;
     let px = a.x;
     let py = a.y;
-    for (let i = 0; i < 600; i++) {
+    for (let i = 0; i < 900; i++) {
       world.step(STEP_MS);
       path += Math.hypot(a.x - px, a.y - py);
-      maxDy = Math.max(maxDy, Math.abs(a.y - 100));
+      minX = Math.min(minX, a.x);
+      maxX = Math.max(maxX, a.x);
       px = a.x;
       py = a.y;
       expect(Number.isFinite(a.x) && Number.isFinite(a.y)).toBe(true);
     }
-    expect(path).toBeGreaterThan(50); // 若仍是“按压死锁”，路径会趋近 0
-    expect(maxDy).toBeGreaterThan(5); // 避让扫掠确实把直线顶墙改成了斜向滑行
+    expect(maxX).toBeGreaterThan(170); // 到过墙边
+    expect(maxX - minX).toBeGreaterThan(40); // 反射回撤发生了（若“按压死锁”则恒为 0）
+    expect(path).toBeGreaterThan(300); // 持续往复运动
   });
 
   it('六车混战 25 秒：位置有界、数值有限、战斗持续进行', () => {

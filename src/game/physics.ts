@@ -34,28 +34,13 @@ export class KinematicPhysics implements PhysicsAdapter {
     const dtS = dtMs / 1000;
     for (const t of world.tanks) {
       if (!t.alive) continue;
-      t.blocked = false; // 运动学模式自带边界反弹，不存在卡死
       t.x += t.vx * dtS;
       t.y += t.vy * dtS;
       const min = t.size;
-      if (t.x < min) {
-        t.x = min;
-        if (t.vx < 0) t.vx = -t.vx;
-      } else if (t.x > this.width - min) {
-        t.x = this.width - min;
-        if (t.vx > 0) t.vx = -t.vx;
-      }
-      if (t.y < min) {
-        t.y = min;
-        if (t.vy < 0) t.vy = -t.vy;
-      } else if (t.y > this.height - min) {
-        t.y = this.height - min;
-        if (t.vy > 0) t.vy = -t.vy;
-      }
-      if (t.vx !== 0 || t.vy !== 0) {
-        t.heading = directionAngle(t.vx, t.vy);
-        t.moveHeading = t.heading;
-      }
+      // 纯钳位，不做速度反弹：方向反射已由 AI 的触墙锁负责，与 Matter 适配器行为一致
+      t.x = Math.min(Math.max(t.x, min), this.width - min);
+      t.y = Math.min(Math.max(t.y, min), this.height - min);
+      if (t.vx !== 0 || t.vy !== 0) t.moveHeading = directionAngle(t.vx, t.vy);
     }
   }
 }
