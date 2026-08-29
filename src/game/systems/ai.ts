@@ -6,8 +6,9 @@ import type { World } from '../world';
 /** 触墙反射锁参数（用户指定方案：不预测“开始撞墙”，真撞上才锁，退到指定距离解锁） */
 const WALL_CONTACT = 3; // 真实接触带（px）：贴上才算撞
 const WALL_PRESS_MIN = 0.35; // 撞墙分量阈值（≈20°）：沿墙掠过的擦碰永不触发，消除“疯狂试探”
-const WALL_RELEASE = 60; // 锁定后退，离该墙超过此距离才解锁（px）
-const OBLIQUE = 0.6; // 斜向反弹的切向分量（≈31°偏置）：解锁点已沿墙错位，回approach变小角度
+const WALL_RELEASE = 60; // 锁定后退，离该墙超过此距离且目标不再压墙才解锁（px）
+const WALL_RETREAT_MAX = 260; // 后退上限：目标始终压墙（如墙角蹲敌）时到此距离强制解锁，避免横穿全图
+const OBLIQUE = 0.6; // 斜向反弹的切向分量（≈31°偏置）：解锁点已沿墙错位，回 approach 变小角度
 
 /** 到四面墙的内侧距离（可为负=穿透，判定同样成立） */
 function wallDist(t: Tank, world: World) {
@@ -20,11 +21,11 @@ function wallDist(t: Tank, world: World) {
 }
 
 /**
- * AI 系统：索敌（粘性目标 + 炮口夹角加权）→ 移动决策 → 触墙反射锁定 → 旋转炮管。
- * 顶墙脱困（用户指定方案）：不预测“开始撞墙”，真撞上（接触带内且撞墙分量>≈20°）
- * 才把方向沿墙轴反射并锁定；锁定后退至离墙指定距离才解锁恢复常规决策。
- * 反弹带切向斜置且擦墙永不触发，避免直线弹回式的原地乒乓“试探”。
- * 纯几何判定，不依赖物理引擎反馈，逻辑层单测与浏览器行为完全一致。
+ * AI 系统：索敌（粘性目标 + 炮口夹角加权）→ 移动决策 → 触墙反射锁 → 旋转炮管。
+ * 顶墙脱困（用户方案“速度反向 + 距离限制”的完整形态）：真撞上（接触带内且
+ * 撞墙分量>≈20°）才反向并锁定后退；解锁 = 离墙到位 且 当前意图不再压这面墙
+ * （防止“退出去又折回来撞”的乒乓），退过上限则强制解锁兜底；
+ * 双墙贴角时锁定方向直指战场中心，一发解套。纯几何判定，单测=浏览器行为。
  */
 export function updateAI(t: Tank, world: World, dtMs: number): void {
   const dtS = dtMs / 1000;
@@ -35,98 +36,108 @@ export function updateAI(t: Tank, world: World, dtMs: number): void {
   }
   if (!t.foe) t.foe = findTarget(t, world);
 
-  let moving = true;
+  // —— 常规移动决策始终评估：锁定期也刷新 goalHeading，
+  //    解锁判定要靠它，敌方挪位后目标不再压墙的那一帧才能平滑衔接 ——
+  let wantMove = true;
+  if (t.orderTarget) {
+    const ox = t.orderTarget.x - t.x;
+    const oy = t.orderTarget.y - t.y;
+    if (Math.sqrt(ox * ox + oy * oy) <= ARRIVE_EPS) {
+      t.orderTarget = null;
+      t.wanderAt = 0; // 指令完成：本帧就重掷游走方向，避免 goalHeading 残留指向墙
+    } else {
+      t.goalHeading = directionAngle(ox, oy);
+    }
+  } else if (t.foe) {
+    const foeDist = t.distanceTo(t.foe.x, t.foe.y);
+    if (foeDist <= t.gun.sight + t.size) {
+      wantMove = false; // 进入射程，停下对射
+    } else {
+      t.goalHeading = t.angleTo(t.foe.x, t.foe.y); // 追击
+    }
+  } else if (world.clock >= t.wanderAt) {
+    // 游走：定期小角度转向
+    t.goalHeading = directionAngle(
+      Math.sin(t.goalHeading) + (world.rng() - 0.5),
+      Math.cos(t.goalHeading) + (world.rng() - 0.5)
+    );
+    t.wanderAt = world.clock + 1500 + world.rng() * 3000;
+  }
+
+  const d = wallDist(t, world);
 
   if (t.wallLock) {
-    // —— 锁定态：沿反射方向行驶；贴到别的墙/死角时二次反射；离开锁定墙指定距离才解锁 ——
+    // —— 锁定态：沿锁定方向后退；双墙贴角直接奔战场中心一发解套，否则对二次触墙逐轴反射 ——
     let dx = Math.sin(t.lockHeading);
     let dy = Math.cos(t.lockHeading);
-    const d = wallDist(t, world);
-    if (
-      (dx > WALL_PRESS_MIN && d.right < WALL_CONTACT) ||
-      (dx < -WALL_PRESS_MIN && d.left < WALL_CONTACT)
-    ) {
-      dx = -dx;
-    }
-    if (
-      (dy > WALL_PRESS_MIN && d.bottom < WALL_CONTACT) ||
-      (dy < -WALL_PRESS_MIN && d.top < WALL_CONTACT)
-    ) {
-      dy = -dy;
+    const contactX = d.right < WALL_CONTACT || d.left < WALL_CONTACT;
+    const contactY = d.bottom < WALL_CONTACT || d.top < WALL_CONTACT;
+    if (contactX && contactY) {
+      dx = world.width / 2 - t.x;
+      dy = world.height / 2 - t.y;
+    } else {
+      if (
+        (dx > WALL_PRESS_MIN && d.right < WALL_CONTACT) ||
+        (dx < -WALL_PRESS_MIN && d.left < WALL_CONTACT)
+      ) {
+        dx = -dx;
+      }
+      if (
+        (dy > WALL_PRESS_MIN && d.bottom < WALL_CONTACT) ||
+        (dy < -WALL_PRESS_MIN && d.top < WALL_CONTACT)
+      ) {
+        dy = -dy;
+      }
     }
     t.lockHeading = directionAngle(dx, dy);
-    t.heading = t.lockHeading;
-    const away =
-      t.wallLock.axis === 'x'
-        ? t.wallLock.side > 0
-          ? d.right
-          : d.left
-        : t.wallLock.side > 0
-          ? d.bottom
-          : d.top;
-    if (away > WALL_RELEASE) t.wallLock = null; // 解锁后 goalHeading 照常驱动，指令/索敌不丢
-  } else {
-    // —— 常规移动决策：指令 > 对射停顿/追击 > 游走 ——
-    if (t.orderTarget) {
-      const ox = t.orderTarget.x - t.x;
-      const oy = t.orderTarget.y - t.y;
-      if (Math.sqrt(ox * ox + oy * oy) <= ARRIVE_EPS) {
-        t.orderTarget = null;
-      } else {
-        t.goalHeading = directionAngle(ox, oy);
-      }
-    } else if (t.foe) {
-      const d = t.distanceTo(t.foe.x, t.foe.y);
-      if (d <= t.gun.sight + t.size) {
-        moving = false; // 进入射程，停下对射
-      } else {
-        t.goalHeading = t.angleTo(t.foe.x, t.foe.y); // 追击
-      }
-    } else if (world.clock >= t.wanderAt) {
-      // 游走：定期小角度转向
-      t.goalHeading = directionAngle(
-        Math.sin(t.goalHeading) + (world.rng() - 0.5),
-        Math.cos(t.goalHeading) + (world.rng() - 0.5)
-      );
-      t.wanderAt = world.clock + 1500 + world.rng() * 3000;
-    }
-    t.heading = t.goalHeading;
 
-    // —— 真撞检测（事后式）：接触带内 + 目标方向撞墙分量足够大才锁；
-    //    锁定方向 = 法轴反射 + 切向斜置，避免 180° 直线弹回导致的原地乒乓 ——
-    if (moving) {
-      const d = wallDist(t, world);
-      let dx = Math.sin(t.goalHeading);
-      let dy = Math.cos(t.goalHeading);
-      let lock: { axis: 'x' | 'y'; side: 1 | -1 } | null = null;
-      if (dx > WALL_PRESS_MIN && d.right < WALL_CONTACT) {
+    const w = t.wallLock;
+    const away = w.axis === 'x' ? (w.side > 0 ? d.right : d.left) : w.side > 0 ? d.bottom : d.top;
+    // 目标方向在这面墙法轴上的投影：>阈值说明“解锁后必然又折回来撞”；
+    // 停顿对射（wantMove=false）没有移动意图，解锁后就地开火，不算折返
+    const towardWall =
+      wantMove &&
+      (w.axis === 'x' ? Math.sin(t.goalHeading) : Math.cos(t.goalHeading)) * w.side >
+        WALL_PRESS_MIN;
+    // 解锁 = 距离到位且目标已不压墙；退过上限仍压墙（墙角蹲敌）则强制解锁兜底
+    if ((away > WALL_RELEASE && !towardWall) || away > WALL_RETREAT_MAX) t.wallLock = null;
+  } else if (wantMove) {
+    // —— 真撞检测（事后式）：接触带内 + 目标方向撞墙分量足够大才锁 ——
+    let dx = Math.sin(t.goalHeading);
+    let dy = Math.cos(t.goalHeading);
+    const hitX =
+      (dx > WALL_PRESS_MIN && d.right < WALL_CONTACT) ||
+      (dx < -WALL_PRESS_MIN && d.left < WALL_CONTACT);
+    const hitY =
+      (dy > WALL_PRESS_MIN && d.bottom < WALL_CONTACT) ||
+      (dy < -WALL_PRESS_MIN && d.top < WALL_CONTACT);
+    let lock: { axis: 'x' | 'y'; side: 1 | -1 } | null = null;
+    if (hitX && hitY) {
+      // 角落：不玩逐轴弹球，锁定方向直指战场中心
+      lock =
+        Math.abs(dx) >= Math.abs(dy)
+          ? { axis: 'x', side: (dx > 0 ? 1 : -1) as 1 | -1 }
+          : { axis: 'y', side: (dy > 0 ? 1 : -1) as 1 | -1 };
+      t.lockHeading = directionAngle(world.width / 2 - t.x, world.height / 2 - t.y);
+    } else if (hitX || hitY) {
+      if (hitX) {
+        lock = { axis: 'x', side: (dx > 0 ? 1 : -1) as 1 | -1 };
         dx = -dx;
-        lock = { axis: 'x', side: 1 };
-      } else if (dx < -WALL_PRESS_MIN && d.left < WALL_CONTACT) {
-        dx = -dx;
-        lock = { axis: 'x', side: -1 };
-      } else if (dy > WALL_PRESS_MIN && d.bottom < WALL_CONTACT) {
+        const ty = dy !== 0 ? Math.sign(dy) : t.hue % 2 === 0 ? 1 : -1;
+        dy += ty * OBLIQUE;
+      } else {
+        lock = { axis: 'y', side: (dy > 0 ? 1 : -1) as 1 | -1 };
         dy = -dy;
-        lock = { axis: 'y', side: 1 };
-      } else if (dy < -WALL_PRESS_MIN && d.top < WALL_CONTACT) {
-        dy = -dy;
-        lock = { axis: 'y', side: -1 };
+        const tx = dx !== 0 ? Math.sign(dx) : t.hue % 2 === 0 ? 1 : -1;
+        dx += tx * OBLIQUE;
       }
-      if (lock) {
-        // 斜向反弹：保留原切向方向；垂直入射时按坦克稳定侧别（色相奇偶）偏置
-        if (lock.axis === 'x') {
-          const ty = dy !== 0 ? Math.sign(dy) : t.hue % 2 === 0 ? 1 : -1;
-          dy += ty * OBLIQUE;
-        } else {
-          const tx = dx !== 0 ? Math.sign(dx) : t.hue % 2 === 0 ? 1 : -1;
-          dx += tx * OBLIQUE;
-        }
-        t.heading = directionAngle(dx, dy);
-        t.lockHeading = t.heading;
-        t.wallLock = lock;
-      }
+      t.lockHeading = directionAngle(dx, dy);
     }
+    if (lock) t.wallLock = lock;
   }
+
+  const moving = t.wallLock !== null ? true : wantMove;
+  t.heading = t.wallLock ? t.lockHeading : t.goalHeading;
 
   t.stopped = !moving;
   const speed = moving ? t.speed : 0;

@@ -106,24 +106,30 @@ describe('AI 索敌与移动决策', () => {
     expect(Math.abs(a.vy)).toBeGreaterThan(20); // 叠加了切向斜置，不走原路乒乓
   });
 
-  it('锁定迟滞：未到解锁距离前指令不得改向；离开后恢复常规决策', () => {
+  it('解锁双条件：距离到位但目标仍压墙则不解锁（防折返）；目标转向或退过上限才解锁', () => {
     const world = makeWorld(600, 600);
     const a = makeTank(world, 'machinegun', 560, 300, EAST);
     noWander(a);
     a.wallLock = { axis: 'x', side: 1 };
     a.lockHeading = WEST;
-    a.orderTarget = { x: 598, y: 300 }; // 指令要求向东，但 d.right=20<60，锁定维持向西
+    a.orderTarget = { x: 598, y: 300 }; // 目标方向仍压右墙
 
+    a.x = 500; // away = 80 > 60，但解锁必然折返 → 保持锁定继续西撤
     updateAI(a, world, dt);
     expect(a.wallLock).not.toBeNull();
     expect(a.vx).toBeLessThan(0);
 
-    a.x = 500; // d.right = 80 > 60 → 本帧走完解除锁定
+    a.orderTarget = { x: 400, y: 500 }; // 目标转为西南，不再压右墙 → 距离早已够，立即解锁
     updateAI(a, world, dt);
     expect(a.wallLock).toBeNull();
+    expect(a.vy).toBeGreaterThan(0); // 朝指令的西南/南方向行进
 
-    updateAI(a, world, dt); // 解锁后指令重新接管 → 向东
-    expect(a.vx).toBeGreaterThan(0);
+    a.wallLock = { axis: 'x', side: 1 }; // 墙角蹲敌场景：目标始终压墙
+    a.lockHeading = WEST;
+    a.orderTarget = { x: 598, y: 300 };
+    a.x = 318; // away = 262 > 260 → 强制解锁兜底，不为一个敌人横穿全图
+    updateAI(a, world, dt);
+    expect(a.wallLock).toBeNull();
   });
 
   it('擦墙不触发：贴接触带平行移动不锁、不反弹（消除“疯狂试探”）', () => {
@@ -136,19 +142,15 @@ describe('AI 索敌与移动决策', () => {
     expect(a.vy).toBeGreaterThan(0); // 正常南下
   });
 
-  it('转角逐帧解套：先锁先撞的轴，几帧内二次反射合成斜向撤离', () => {
+  it('角落解套：同时贴上两面墙 → 锁定方向直指战场中心，不玩逐轴弹球', () => {
     const world = makeWorld(600, 600);
     const a = makeTank(world, 'machinegun', 578, 578, Math.PI / 4); // 东南向压右下角
     noWander(a);
-    a.orderTarget = { x: 598, y: 598 };
+    a.orderTarget = { x: 598, y: 596 }; // 目标方向两轴分量都 >0.35 → 双墙真撞
     updateAI(a, world, dt);
-    expect(a.wallLock).toEqual({ axis: 'x', side: 1 }); // 单轴触发，x 优先
-    expect(a.vx).toBeLessThan(0);
-
-    for (let i = 0; i < 5; i++) world.step(STEP_MS); // 锁定分支对底墙二次反射
-    expect(a.wallLock?.axis).toBe('x'); // 撤离中锁定锚点不变
-    expect(a.vx).toBeLessThan(0);
-    expect(a.vy).toBeLessThan(0); // 已转为西北斜向撤离
+    expect(a.wallLock).toEqual({ axis: 'x', side: 1 }); // x 分量更大，锚定 x 轴
+    expect(a.vx).toBeLessThan(0); // 西北直奔战场中心 (300,300)
+    expect(a.vy).toBeLessThan(0);
   });
 
   it('锁定期间不停火：向西脱离的同时炮管转向东敌并命中', () => {
