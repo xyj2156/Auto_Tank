@@ -95,15 +95,15 @@ describe('AI 索敌与移动决策', () => {
     expect(Math.hypot(a.vx, a.vy)).toBeCloseTo(TANK_BASE.speed);
   });
 
-  it('触墙反射锁定：朝东压右墙 → 方向反射向西并进入锁定', () => {
+  it('触墙反射锁定：正东压右墙 → 斜向反弹进入锁定（非 180° 直线弹回）', () => {
     const world = makeWorld(600, 600);
-    const a = makeTank(world, 'machinegun', 576, 300, EAST); // d.right = 600-20-576 = 4 < 接触带
+    const a = makeTank(world, 'machinegun', 578, 300, EAST); // d.right = 600-20-578 = 2 < 接触带
     noWander(a);
     a.orderTarget = { x: 598, y: 300 }; // 指令点在墙内一侧，抵达后必然持续朝东顶墙
     updateAI(a, world, dt);
     expect(a.wallLock).toEqual({ axis: 'x', side: 1 });
-    expect(a.lockHeading).toBeCloseTo(WEST);
-    expect(a.vx).toBeLessThan(-50); // 反射后向西行进
+    expect(a.vx).toBeLessThan(-45); // 法轴反射：向西撤离
+    expect(Math.abs(a.vy)).toBeGreaterThan(20); // 叠加了切向斜置，不走原路乒乓
   });
 
   it('锁定迟滞：未到解锁距离前指令不得改向；离开后恢复常规决策', () => {
@@ -126,16 +126,29 @@ describe('AI 索敌与移动决策', () => {
     expect(a.vx).toBeGreaterThan(0);
   });
 
-  it('转角双重反射：同时压两面墙时两轴一起反射（本例东南→西北）', () => {
+  it('擦墙不触发：贴接触带平行移动不锁、不反弹（消除“疯狂试探”）', () => {
     const world = makeWorld(600, 600);
-    const a = makeTank(world, 'machinegun', 576, 576, Math.PI / 4); // 东南向压右下角
+    const a = makeTank(world, 'machinegun', 579, 300, 0); // d.right = 1px，朝正南（平行右墙）
+    noWander(a);
+    a.orderTarget = { x: 579, y: 500 }; // 指令沿墙直下
+    updateAI(a, world, dt);
+    expect(a.wallLock).toBeNull(); // 撞墙分量 0 < 阈值，不算撞
+    expect(a.vy).toBeGreaterThan(0); // 正常南下
+  });
+
+  it('转角逐帧解套：先锁先撞的轴，几帧内二次反射合成斜向撤离', () => {
+    const world = makeWorld(600, 600);
+    const a = makeTank(world, 'machinegun', 578, 578, Math.PI / 4); // 东南向压右下角
     noWander(a);
     a.orderTarget = { x: 598, y: 598 };
     updateAI(a, world, dt);
-    expect(a.wallLock?.axis).toBe('x'); // 锁定锚点记录先判到的 x 轴
-    expect(a.vx).toBeLessThan(0); // 西北
-    expect(a.vy).toBeLessThan(0);
-    expect(a.lockHeading).toBeCloseTo(Math.PI + Math.PI / 4);
+    expect(a.wallLock).toEqual({ axis: 'x', side: 1 }); // 单轴触发，x 优先
+    expect(a.vx).toBeLessThan(0);
+
+    for (let i = 0; i < 5; i++) world.step(STEP_MS); // 锁定分支对底墙二次反射
+    expect(a.wallLock?.axis).toBe('x'); // 撤离中锁定锚点不变
+    expect(a.vx).toBeLessThan(0);
+    expect(a.vy).toBeLessThan(0); // 已转为西北斜向撤离
   });
 
   it('锁定期间不停火：向西脱离的同时炮管转向东敌并命中', () => {

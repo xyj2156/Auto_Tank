@@ -3,10 +3,11 @@ import { angleDiff, directionAngle, turnToward } from '../../core/math';
 import type { Tank } from '../tank';
 import type { World } from '../world';
 
-/** 触墙反射锁定参数（用户指定方案：纯几何判定，不依赖物理引擎反馈） */
-const WALL_CONTACT = 6; // 距墙接触带（px）
-const WALL_RELEASE = 60; // 锁定期内离该墙超过此距离才解锁（px）
-const PRESS_EPS = 0.05; // 朝向在该轴上的分量阈值，确保是“朝墙开”而非离开
+/** 触墙反射锁参数（用户指定方案：不预测“开始撞墙”，真撞上才锁，退到指定距离解锁） */
+const WALL_CONTACT = 3; // 真实接触带（px）：贴上才算撞
+const WALL_PRESS_MIN = 0.35; // 撞墙分量阈值（≈20°）：沿墙掠过的擦碰永不触发，消除“疯狂试探”
+const WALL_RELEASE = 60; // 锁定后退，离该墙超过此距离才解锁（px）
+const OBLIQUE = 0.6; // 斜向反弹的切向分量（≈31°偏置）：解锁点已沿墙错位，回approach变小角度
 
 /** 到四面墙的内侧距离（可为负=穿透，判定同样成立） */
 function wallDist(t: Tank, world: World) {
@@ -20,9 +21,10 @@ function wallDist(t: Tank, world: World) {
 
 /**
  * AI 系统：索敌（粘性目标 + 炮口夹角加权）→ 移动决策 → 触墙反射锁定 → 旋转炮管。
- * 顶墙脱困采用几何反射锁：触墙且朝向含撞墙分量时把方向沿该墙轴反射并锁定，
- * 保持反射方向行驶，直到离开该墙指定距离才解锁恢复 AI——
- * 不依赖物理引擎的速度/位移反馈，逻辑层单测与浏览器行为完全一致。
+ * 顶墙脱困（用户指定方案）：不预测“开始撞墙”，真撞上（接触带内且撞墙分量>≈20°）
+ * 才把方向沿墙轴反射并锁定；锁定后退至离墙指定距离才解锁恢复常规决策。
+ * 反弹带切向斜置且擦墙永不触发，避免直线弹回式的原地乒乓“试探”。
+ * 纯几何判定，不依赖物理引擎反馈，逻辑层单测与浏览器行为完全一致。
  */
 export function updateAI(t: Tank, world: World, dtMs: number): void {
   const dtS = dtMs / 1000;
@@ -40,10 +42,16 @@ export function updateAI(t: Tank, world: World, dtMs: number): void {
     let dx = Math.sin(t.lockHeading);
     let dy = Math.cos(t.lockHeading);
     const d = wallDist(t, world);
-    if ((dx > PRESS_EPS && d.right < WALL_CONTACT) || (dx < -PRESS_EPS && d.left < WALL_CONTACT)) {
+    if (
+      (dx > WALL_PRESS_MIN && d.right < WALL_CONTACT) ||
+      (dx < -WALL_PRESS_MIN && d.left < WALL_CONTACT)
+    ) {
       dx = -dx;
     }
-    if ((dy > PRESS_EPS && d.bottom < WALL_CONTACT) || (dy < -PRESS_EPS && d.top < WALL_CONTACT)) {
+    if (
+      (dy > WALL_PRESS_MIN && d.bottom < WALL_CONTACT) ||
+      (dy < -WALL_PRESS_MIN && d.top < WALL_CONTACT)
+    ) {
       dy = -dy;
     }
     t.lockHeading = directionAngle(dx, dy);
@@ -84,27 +92,35 @@ export function updateAI(t: Tank, world: World, dtMs: number): void {
     }
     t.heading = t.goalHeading;
 
-    // —— 触墙检测（仅移动时）：撞哪面墙就沿哪根轴反射；转角可能同时撞两面墙 ——
+    // —— 真撞检测（事后式）：接触带内 + 目标方向撞墙分量足够大才锁；
+    //    锁定方向 = 法轴反射 + 切向斜置，避免 180° 直线弹回导致的原地乒乓 ——
     if (moving) {
       const d = wallDist(t, world);
-      let dx = Math.sin(t.heading);
-      let dy = Math.cos(t.heading);
+      let dx = Math.sin(t.goalHeading);
+      let dy = Math.cos(t.goalHeading);
       let lock: { axis: 'x' | 'y'; side: 1 | -1 } | null = null;
-      if (dx > PRESS_EPS && d.right < WALL_CONTACT) {
+      if (dx > WALL_PRESS_MIN && d.right < WALL_CONTACT) {
         dx = -dx;
         lock = { axis: 'x', side: 1 };
-      } else if (dx < -PRESS_EPS && d.left < WALL_CONTACT) {
+      } else if (dx < -WALL_PRESS_MIN && d.left < WALL_CONTACT) {
         dx = -dx;
         lock = { axis: 'x', side: -1 };
-      }
-      if (dy > PRESS_EPS && d.bottom < WALL_CONTACT) {
+      } else if (dy > WALL_PRESS_MIN && d.bottom < WALL_CONTACT) {
         dy = -dy;
-        lock = lock ?? { axis: 'y', side: 1 };
-      } else if (dy < -PRESS_EPS && d.top < WALL_CONTACT) {
+        lock = { axis: 'y', side: 1 };
+      } else if (dy < -WALL_PRESS_MIN && d.top < WALL_CONTACT) {
         dy = -dy;
-        lock = lock ?? { axis: 'y', side: -1 };
+        lock = { axis: 'y', side: -1 };
       }
       if (lock) {
+        // 斜向反弹：保留原切向方向；垂直入射时按坦克稳定侧别（色相奇偶）偏置
+        if (lock.axis === 'x') {
+          const ty = dy !== 0 ? Math.sign(dy) : t.hue % 2 === 0 ? 1 : -1;
+          dy += ty * OBLIQUE;
+        } else {
+          const tx = dx !== 0 ? Math.sign(dx) : t.hue % 2 === 0 ? 1 : -1;
+          dx += tx * OBLIQUE;
+        }
         t.heading = directionAngle(dx, dy);
         t.lockHeading = t.heading;
         t.wallLock = lock;
