@@ -1,0 +1,24 @@
+{
+  "name": "auto-tank",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "description": "自动坦克战斗演示 —— Vite + TypeScript + Pixi.js + Matter.js 重写版",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "matter-js": "^0.20.0",
+    "pixi.js": "^8.20.1"
+  },
+  "devDependencies": {
+    "@types/matter-js": "^0.20.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
+  }
+}

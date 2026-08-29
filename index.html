@@ -1,44 +1,131 @@
-<!DOCTYPE HTML>
-<html>
+<!DOCTYPE html>
+<html lang="zh-CN">
 
 <head>
-    <title>坦克测试</title>
-    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-     <meta name="author" content="Jief King@温馨"/>
-    <meta name="description" content="Description" />
-    <style>
-        body{margin:0;padding:0;}
-        #can{display:block;}
-    </style>
-    <script type='text/javascript' src='tankClass-GuoHang.js'></script>
-    <script type='text/javascript' src='battlefield.js'></script>
-    <script type='text/javascript' src='tank.bot.js'></script>
+  <meta charset="UTF-8" />
+  <title>自动坦克 Auto Tank</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="author" content="Jief King@温馨" />
+  <meta name="description" content="AI 坦克自动战斗演示：Vite + TypeScript + Pixi.js + Matter.js 重写版" />
+  <style>
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #0d1117;
+    }
+
+    #stage {
+      position: fixed;
+      inset: 0;
+    }
+
+    #stage canvas {
+      display: block;
+      cursor: crosshair;
+    }
+
+    #hud {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    }
+
+    .banner {
+      position: absolute;
+      top: 28px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-8px);
+      padding: 8px 26px;
+      border-radius: 8px;
+      font-size: 20px;
+      color: #d8b4fe;
+      background: rgba(88, 28, 135, 0.35);
+      border: 1px solid rgba(216, 180, 254, 0.35);
+      opacity: 0;
+      transition: opacity 0.35s, transform 0.35s;
+      white-space: nowrap;
+    }
+
+    .banner.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    .panel {
+      position: absolute;
+      top: 84px;
+      left: 16px;
+      right: 16px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: flex-start;
+    }
+
+    .card {
+      background: rgba(13, 20, 30, 0.78);
+      border: 1px solid rgba(120, 160, 220, 0.25);
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: #c9d6e5;
+      font-size: 12px;
+      min-width: 230px;
+    }
+
+    .card h3 {
+      margin: 0 0 6px;
+      font-size: 14px;
+    }
+
+    .card .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      line-height: 1.7;
+    }
+
+    .card .row b {
+      font-weight: 500;
+      color: #7f95ae;
+    }
+
+    .card .sub {
+      margin: 6px 0 0;
+      color: #93a7bd;
+      line-height: 1.5;
+    }
+
+    .hint {
+      position: absolute;
+      left: 16px;
+      bottom: 12px;
+      color: #64748b;
+      font-size: 12px;
+    }
+
+    #boot-error {
+      position: fixed;
+      inset: 40% 10% auto 10%;
+      padding: 16px;
+      color: #fca5a5;
+      background: rgba(69, 10, 10, 0.8);
+      border-radius: 8px;
+      font-size: 14px;
+    }
+  </style>
 </head>
 
 <body>
-    <canvas id='can'></canvas>
-    <script>
-        var can = document.getElementById('can');
-        
-        can.width = window.innerWidth;
-        can.height = window.innerHeight;
-        
-        // 战场对象
-        
-        var zhan = {
-            // canvas对象
-            'box':can,
-            // 每局，坦克数量
-            'num':12
-        };
-        var test = {
-            'box':can,
-            'num':1,
-            'test':true
-        };
-        // var m = new Battlefield(test);
-        var m = new Battlefield(zhan);
-    </script>
+  <div id="stage"></div>
+  <div id="hud">
+    <div class="hint">拖拽框选 · 单击选中（Shift 加选）· 单击空地/右键 = 移动指令 · 其余交给 AI</div>
+  </div>
+  <div id="boot-error" hidden>渲染初始化失败，请检查 WebGL 支持或浏览器控制台。</div>
+  <script type="module" src="/src/main.ts"></script>
 </body>
 
 </html>
