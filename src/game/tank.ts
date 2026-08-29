@@ -39,8 +39,10 @@ export class Tank {
   lv = 0;
   expTable: number[];
 
-  /** 期望车体朝向（AI 产出），方向为 (sin, cos) */
+  /** 期望车体朝向（目标方向 + 避让偏压后的最终值），方向为 (sin, cos) */
   heading: number;
+  /** 纯目标方向（不含避让偏压），由指令/追击/游走维护 */
+  goalHeading: number;
   /** 实际运动朝向（物理写回，渲染用） */
   moveHeading: number;
   /** 炮管指向 */
@@ -58,14 +60,12 @@ export class Tank {
   /** 游走重选方向时刻（世界时钟 ms） */
   wanderAt = 0;
 
-  /** —— 脱困机动：物理层检测到“命令了移动但实际几乎没位移”时置位 —— */
+  /** —— 卡死避让：物理层检测到“命令了移动但实际几乎没位移”时置位 —— */
   blocked = false;
-  /** 脱困转向的截止时间（世界时钟 ms） */
-  escapeUntil = 0;
-  /** 脱困期间强制的车体朝向 */
-  escapeHeading = 0;
-  /** 脱困转向左右交替，避免在两面墙之间来回顶 */
-  blockFlip = false;
+  /** 避让偏转量（rad），叠加在 goalHeading 上；扫出快、回正慢形成迟滞 */
+  avoid = 0;
+  /** 扫掠方向（±1，仅当一侧扫到极限才反向；不再左右交替以免净位移抵消） */
+  avoidDir = 1;
 
   /** 头顶浮动消息 */
   msg: { text: string; expiresAt: number } | null = null;
@@ -102,6 +102,7 @@ export class Tank {
     this.hue = Math.floor(Math.random() * 360);
 
     this.heading = opts.heading ?? normalizeAngle(Math.random() * TAU);
+    this.goalHeading = this.heading;
     this.moveHeading = this.heading;
     this.gunHeading = this.heading;
 

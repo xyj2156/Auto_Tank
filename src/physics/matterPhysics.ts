@@ -79,14 +79,14 @@ export class MatterPhysics implements PhysicsAdapter {
       });
     }
     Matter.Engine.update(this.engine, dtMs);
-    const dtS = dtMs / 1000;
     for (const t of world.tanks) {
       if (!t.alive || !t.body) continue;
       const b = t.body as Matter.Body;
-      // 卡死检测：命令了移动但实际位移远低于预期（顶墙/被别车挤住）→ 交给 AI 脱困机动
-      const expected = Math.hypot(t.vx, t.vy) * dtS;
-      const actual = Math.hypot(b.position.x - t.x, b.position.y - t.y);
-      t.blocked = expected >= 0.5 && actual < expected * 0.25;
+      // 卡死检测用“命令速度 vs 实际获得速度”，不用位移差：
+      // body 稳定停在墙的法向接触点（略有穿透），位移/钳位偏差恒 >0.4px 会漏判；
+      // 而顶墙时法向分量被求解器归零，Engine.update 后的 body.speed 才真实反映“动没动”。
+      const commanded = Math.hypot(t.vx, t.vy) / VEL_DIV; // 换算到 Matter 速度单位
+      t.blocked = commanded > 0.2 && b.speed < commanded * 0.35;
       t.x = clamp(b.position.x, t.size, this.width - t.size);
       t.y = clamp(b.position.y, t.size, this.height - t.size);
       if (b.speed > 0.3) t.moveHeading = directionAngle(b.velocity.x, b.velocity.y);

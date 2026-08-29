@@ -96,7 +96,7 @@ describe('AI 索敌与移动决策', () => {
     expect(Math.hypot(a.vx, a.vy)).toBeCloseTo(TANK_BASE.speed);
   });
 
-  it('卡死脱困：blocked 触发限时侧转机动，机动中保持移动与索敌；解除后恢复追击朝向', () => {
+  it('卡死避让：blocked 期间渐进扫偏且保持移动与索敌；解除后迟滞回正', () => {
     const world = makeWorld();
     const a = makeTank(world, 'machinegun', 100, 400, EAST);
     const b = makeTank(world, 'machinegun', 300, 400, WEST); // 距离 200：可见但在射程外，本应向东追击
@@ -104,15 +104,35 @@ describe('AI 索敌与移动决策', () => {
 
     a.blocked = true; // 模拟物理层报告“顶墙/被挤住”
     updateAI(a, world, dt);
-    expect(a.escapeUntil).toBeGreaterThan(world.clock);
-    expect(Math.abs(angleDiff(a.heading, EAST))).toBeGreaterThan(1); // 已偏离撞墙方向
-    expect(Math.hypot(a.vx, a.vy)).toBeCloseTo(TANK_BASE.speed); // 机动中保持移动
-    expect(a.foe).toBe(b); // 索敌不受影响，炮管照常跟敌
+    expect(Math.abs(a.avoid)).toBeGreaterThan(0); // 偏转量开始累积
+    expect(Math.abs(angleDiff(a.heading, EAST))).toBeGreaterThan(0.04); // 已偏离撞墙方向
+    expect(Math.hypot(a.vx, a.vy)).toBeCloseTo(TANK_BASE.speed); // 机动中保持全速移动
+    expect(a.foe).toBe(b); // 索敌与炮管跟踪不受影响
 
-    // 机动窗口结束且物理不再报卡住 → 恢复向东追击
-    world.clock = a.escapeUntil + 1;
+    // 持续顶墙：扫掠角连续增大（不是跳转一次就回头）
+    for (let i = 0; i < 30; i++) updateAI(a, world, dt);
+    expect(Math.abs(a.avoid)).toBeGreaterThan(0.5);
+
+    // 解除卡住 → 以低于扫掠的速度渐进回正
     a.blocked = false;
-    updateAI(a, world, dt);
-    expect(a.heading).toBeCloseTo(EAST);
+    for (let i = 0; i < 120; i++) updateAI(a, world, dt);
+    expect(a.avoid).toBe(0);
+    expect(a.heading).toBeCloseTo(EAST); // 恢复向东追击
+  });
+
+  it('避让扫掠方向具有粘滞性：未扫到极限不会反向，避免左右抵消', () => {
+    const world = makeWorld();
+    const a = makeTank(world, 'machinegun', 100, 400, EAST);
+    const b = makeTank(world, 'machinegun', 300, 400, WEST);
+    noWander(a, b);
+
+    // 极限(2.6rad)之前持续扫到极限：40 步远未到达（约 52 步），方向应始终如一
+    for (let i = 0; i < 40; i++) {
+      a.blocked = true;
+      updateAI(a, world, dt);
+      expect(a.avoidDir).toBe(1);
+    }
+    expect(a.avoid).toBeGreaterThan(1.5); // 单向持续累积，而非来回摆动
+    expect(a.avoid).toBeLessThanOrEqual(2.6);
   });
 });
